@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<!--
+  Página de agendamento de consultas.
+  Os dados são enviados para o backend via API REST (Flask + SQLite).
+-->
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agendamento</title>
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+    integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+    crossorigin="anonymous"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body data-page="agendamento">
+  <div class="container py-5">
+    <div class="row justify-content-center">
+      <div class="col-12 col-xl-10">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <div class="d-flex align-items-center justify-content-between mb-4">
+              <div>
+                <h2 class="h4 mb-1">Agendar consulta</h2>
+                <p class="text-muted mb-0">Agende atendimentos com facilidade.</p>
+              </div>
+              <span class="badge bg-info">Agenda</span>
+            </div>
+
+            <div id="agendamentoAlert"></div>
+
+            <form id="agendamentoForm" class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label" for="patientId">Paciente</label>
+                <select class="form-select" id="patientId" name="patientId" required>
+                  <option value="">Selecione um paciente</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label" for="date">Data</label>
+                <input class="form-control" id="date" name="date" type="date" required />
+              </div>
+              <div class="col-md-3">
+                <label class="form-label" for="time">Hora</label>
+                <input class="form-control" id="time" name="time" type="time" required />
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="reason">Motivo</label>
+                <input class="form-control" id="reason" name="reason" />
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="professional">Profissional</label>
+                <input class="form-control" id="professional" name="professional" />
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="notes">Observações</label>
+                <textarea class="form-control" id="notes" name="notes" rows="2"></textarea>
+              </div>
+              <div class="col-12 text-end">
+                <button type="submit" class="btn btn-primary">Agendar</button>
+              </div>
+            </form>
+
+            <hr class="my-5" />
+
+            <h3 class="h5 mb-3">Agendamentos</h3>
+            <div class="table-responsive">
+              <table class="table table-hover align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>Paciente</th>
+                    <th>Data</th>
+                    <th>Hora</th>
+                    <th>Motivo</th>
+                    <th class="text-end">Ações</th>
+                  </tr>
+                </thead>
+                <tbody id="appointmentsTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<select id="patientId" class="form-select" name="patientId"></select>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<!--
+  Página principal do painel.
+  Esta página carrega o menu lateral e troca o conteúdo exibido
+  no iframe dentro da pasta funcionalidades/.
+-->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Controle</title>
+    <!-- Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar fixo à esquerda -->
+        <aside class="sidebar d-flex flex-column">
+            <div class="sidebar-brand px-4 py-3">
+                <h1 class="h4 mb-1">Painel de Controle</h1>
+                <p class="text-muted mb-0">Área administrativa</p>
+            </div>
+
+            <nav class="nav flex-column px-3" id="mainNav">
+                <a class="nav-link active" href="#" data-src="/funcionalidades/Cadastro">Cadastro</a>
+                <a class="nav-link" href="#" data-src="/funcionalidades/Agendamento">Agendamento</a>
+                <a class="nav-link" href="#" data-src="/funcionalidades/Registros">Registros</a>
+                <a class="nav-link" href="#" data-src="/funcionalidades/lista-edicao-pacientes">Lista de Pacientes</a>
+                <a class="nav-link" href="#" data-src="/funcionalidades/Relatorios">Relatórios</a>
+                <a class="nav-link" href="#" data-src="/funcionalidades/Financeiro">Financeiro</a>
+            </nav>
+
+            <div class="sidebar-footer mt-auto px-4 py-3">
+                <small class="text-muted">© 2026 Camila Marques</small>
+            </div>
+        </aside>
+
+        <!-- Conteúdo principal -->
+        <main class="main-content">
+            <header class="content-header px-4 py-4 border-bottom">
+                <h2 class="h4 mb-1" id="contentTitle">Bem-vindo</h2>
+                <p class="text-muted mb-0">Selecione uma opção no menu para começar.</p>
+            </header>
+
+            <section class="content-area px-4 py-4">
+                <div class="content-frame">
+                    <iframe id="contentFrame" src="/funcionalidades/Cadastro" title="Conteúdo" frameborder="0"></iframe>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
