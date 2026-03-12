@@ -8,27 +8,43 @@ const API_BASE = "";
 
 /* ---------------- API ---------------- */
 
-async function apiRequest(method, path, body=null){
-
+async function apiRequest(method, path, body = null) {
     const options = {
-        method: method,
+        method,
         headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+        },
+    };
+
+    if (body !== null) {
+        options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(API_BASE + path, options);
+    const raw = await response.text();
+
+    if (!response.ok) {
+        let message = `Erro ${response.status}`;
+        if (raw) {
+            try {
+                const payload = JSON.parse(raw);
+                message = payload.message || payload.error || JSON.stringify(payload);
+            } catch (err) {
+                message = raw;
+            }
         }
+        throw new Error(message);
     }
 
-    if(body){
-        options.body = JSON.stringify(body)
+    if (!raw) {
+        return null;
     }
 
-    const response = await fetch(API_BASE + path)
-
-    if(!response.ok){
-        throw new Error("Erro na API")
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        return raw;
     }
-
-    return await response.json()
-
 }
 
 
@@ -44,6 +60,11 @@ function showAlert(container,message,type="success"){
     </div>
     `
 
+}
+
+function showError(container, error) {
+    const message = error?.message || "Erro inesperado";
+    showAlert(container, message, "danger");
 }
 
 
@@ -65,14 +86,21 @@ function formatTime(time){
 
 }
 
+function formatCurrency(value) {
+    if (value === null || value === undefined || value === "") return "";
+    const number = Number(value);
+    if (Number.isNaN(number)) return "";
+    return number.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
 
 /* ---------------- SELECT PACIENTES ---------------- */
 
 async function buildPatientSelect(select){
 
-    if(!select) return
+    if (!select) return []
 
-    const patients = await apiRequest("GET","/api/pacientes")
+    const patients = await apiRequest("GET", "/api/pacientes")
 
     select.innerHTML=""
 
@@ -93,6 +121,8 @@ async function buildPatientSelect(select){
 
     })
 
+    return patients
+
 }
 
 
@@ -100,81 +130,88 @@ async function buildPatientSelect(select){
 /* CADASTRO PACIENTES */
 /* ================================================= */
 
-async function initCadastroPage(){
+async function initCadastroPage() {
+    const form = document.getElementById("cadastroForm");
+    const table = document.getElementById("patientsTable");
+    const alertContainer = document.getElementById("cadastroAlert");
+    if (!form || !table) return;
 
-    const form=document.getElementById("cadastroForm")
-    const table=document.getElementById("patientsTable")
+    async function refresh() {
+        try {
+            const patients = await apiRequest("GET", "/api/pacientes");
+            table.innerHTML = "";
 
-    async function refresh(){
+            patients.forEach((p) => {
+                const row = document.createElement("tr");
 
-        const patients = await apiRequest("GET","/api/pacientes")
+                row.innerHTML = `
+                    <td>${p.nome}</td>
+                    <td>${p.idade || ""}</td>
+                    <td>${p.telefone || ""}</td>
+                    <td>${p.email || ""}</td>
+                `;
 
-        table.innerHTML=""
+                const actionsCell = document.createElement("td");
+                actionsCell.classList.add("text-end");
 
-        patients.forEach(p=>{
+                const deleteButton = document.createElement("button");
+                deleteButton.type = "button";
+                deleteButton.className = "btn btn-danger btn-sm";
+                deleteButton.textContent = "Excluir";
+                deleteButton.addEventListener("click", async () => {
+                    try {
+                        await deletePatient(p.id);
+                        showAlert(alertContainer, "Paciente removido.", "success");
+                        await refresh();
+                    } catch (error) {
+                        showError(alertContainer, error);
+                    }
+                });
 
-            const row=document.createElement("tr")
+                actionsCell.appendChild(deleteButton);
+                row.appendChild(actionsCell);
 
-            row.innerHTML=`
-
-            <td>${p.nome}</td>
-            <td>${p.idade || ""}</td>
-            <td>${p.telefone || ""}</td>
-            <td>${p.email || ""}</td>
-
-            <td>
-
-            <button onclick="deletePatient(${p.id})" class="btn btn-danger btn-sm">
-            Excluir
-            </button>
-
-            </td>
-
-            `
-
-            table.appendChild(row)
-
-        })
-
+                table.appendChild(row);
+            });
+        } catch (error) {
+            showError(alertContainer, error);
+        }
     }
 
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const data = new FormData(form);
 
-    form.addEventListener("submit",async e=>{
-
-        e.preventDefault()
-
-        const data=new FormData(form)
-
-        const payload={
-
-            nome:data.get("nome"),
-            idade:data.get("idade"),
-            telefone:data.get("telefone"),
-            email:data.get("email")
-
+        if (!form.checkValidity()) {
+            form.reportValidity();
+            return;
         }
 
-        await apiRequest("POST","/api/pacientes",payload)
+        const payload = {
+            nome: data.get("nome"),
+            idade: data.get("idade") || null,
+            telefone: data.get("telefone"),
+            email: data.get("email"),
+        };
 
-        form.reset()
+        try {
+            await apiRequest("POST", "/api/pacientes", payload);
+            form.reset();
+            showAlert(alertContainer, "Paciente cadastrado com sucesso.");
+            await refresh();
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    });
 
-        refresh()
-
-    })
-
-    refresh()
-
+    refresh();
 }
 
 
-async function deletePatient(id){
-
-    if(!confirm("Remover paciente?")) return
-
-    await apiRequest("DELETE","/api/pacientes/"+id)
-
-    location.reload()
-
+async function deletePatient(id) {
+    if (!id) return;
+    if (!confirm("Remover paciente?")) return;
+    await apiRequest("DELETE", `/api/pacientes/${id}`);
 }
 
 
@@ -182,62 +219,198 @@ async function deletePatient(id){
 /* LISTA PACIENTES */
 /* ================================================= */
 
-async function initListaPacientesPage(){
+async function initListaPacientesPage() {
+    const table = document.getElementById("patientsListTable");
+    const alertContainer = document.getElementById("patientsListAlert");
+    const form = document.getElementById("editPatientForm");
+    const editingId = document.getElementById("editingId");
+    const editNome = document.getElementById("editNome");
+    const editIdade = document.getElementById("editIdade");
+    const editEscola = document.getElementById("editEscola");
+    const editResponsavel = document.getElementById("editResponsavel");
+    const editTelefone = document.getElementById("editTelefone");
+    const editEmail = document.getElementById("editEmail");
+    const editObservacoes = document.getElementById("editObservacoes");
 
-    const table=document.getElementById("patientsListTable")
+    if (!table) return;
 
-    const patients = await apiRequest("GET","/api/pacientes")
+    function fillEditForm(patient) {
+        if (!editingId) return;
+        editingId.value = patient.id;
+        if (editNome) editNome.value = patient.nome || "";
+        if (editIdade) editIdade.value = patient.idade || "";
+        if (editEscola) editEscola.value = patient.escola || "";
+        if (editResponsavel) editResponsavel.value = patient.responsavel || "";
+        if (editTelefone) editTelefone.value = patient.telefone || "";
+        if (editEmail) editEmail.value = patient.email || "";
+        if (editObservacoes) editObservacoes.value = patient.observacoes || "";
+    }
 
-    table.innerHTML=""
+    async function refresh() {
+        try {
+            const patients = await apiRequest("GET", "/api/pacientes");
+            table.innerHTML = "";
 
-    patients.forEach(p=>{
+            patients.forEach((p) => {
+                const row = document.createElement("tr");
 
-        const row=document.createElement("tr")
+                row.innerHTML = `<td>${p.nome}</td><td>${p.telefone || ""}</td><td>${p.email || ""}</td>`;
 
-        row.innerHTML=`
+                const actionsCell = document.createElement("td");
+                actionsCell.classList.add("text-end");
 
-        <td>${p.nome}</td>
-        <td>${p.telefone || ""}</td>
-        <td>${p.email || ""}</td>
+                const editButton = document.createElement("button");
+                editButton.type = "button";
+                editButton.className = "btn btn-warning btn-sm me-2";
+                editButton.textContent = "Atualizar";
+                editButton.addEventListener("click", () => {
+                    fillEditForm(p);
+                });
 
-        <td>
+                const deleteButton = document.createElement("button");
+                deleteButton.type = "button";
+                deleteButton.className = "btn btn-danger btn-sm";
+                deleteButton.textContent = "Remover";
+                deleteButton.addEventListener("click", async () => {
+                    try {
+                        await deletePatient(p.id);
+                        showAlert(alertContainer, "Paciente removido.", "success");
+                        await refresh();
+                    } catch (error) {
+                        showError(alertContainer, error);
+                    }
+                });
 
-        <button onclick="editPatient(${p.id})" class="btn btn-warning btn-sm">
-        Atualizar
-        </button>
+                actionsCell.appendChild(editButton);
+                actionsCell.appendChild(deleteButton);
+                row.appendChild(actionsCell);
 
-        <button onclick="deletePatient(${p.id})" class="btn btn-danger btn-sm">
-        Remover
-        </button>
+                table.appendChild(row);
+            });
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    }
 
-        </td>
+    form?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const id = editingId?.value;
+        if (!id) {
+            showAlert(alertContainer, "Selecione um paciente para atualizar.", "warning");
+            return;
+        }
 
-        `
+        const payload = {
+            nome: editNome?.value,
+            idade: editIdade?.value || null,
+            escola: editEscola?.value,
+            responsavel: editResponsavel?.value,
+            telefone: editTelefone?.value,
+            email: editEmail?.value,
+            observacoes: editObservacoes?.value,
+        };
 
-        table.appendChild(row)
+        try {
+            await apiRequest("PATCH", `/api/pacientes/${id}`, payload);
+            showAlert(alertContainer, "Paciente atualizado com sucesso.");
+            form.reset();
+            if (editingId) editingId.value = "";
+            await refresh();
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    });
 
-    })
+    await refresh();
 
 }
-
-
-function editPatient(id){
-
-    alert("Funcionalidade de edição pode abrir um modal futuramente")
-
-}
-
 
 /* ================================================= */
 /* AGENDAMENTO */
 /* ================================================= */
 
-async function initAgendamentoPage(){
+async function initAgendamentoPage() {
+    const select = document.getElementById("patientId");
+    const form = document.getElementById("agendamentoForm");
+    const table = document.getElementById("appointmentsTable");
+    const alertContainer = document.getElementById("agendamentoAlert");
 
-    const select=document.getElementById("patientId")
+    if (!select || !form || !table) return;
 
-    await buildPatientSelect(select)
+    let patientsCache = [];
 
+    async function loadPatients() {
+        patientsCache = await buildPatientSelect(select);
+    }
+
+    async function refresh() {
+        try {
+            const appointments = await apiRequest("GET", "/api/agenda");
+            table.innerHTML = "";
+            const patientMap = new Map(patientsCache.map((p) => [p.id, p.nome]));
+
+            appointments.forEach((item) => {
+                const row = document.createElement("tr");
+                const patientName = patientMap.get(item.paciente_id) || item.paciente_id || "";
+
+                row.innerHTML = `
+                    <td>${patientName}</td>
+                    <td>${formatDate(item.data)}</td>
+                    <td>${formatTime(item.horario)}</td>
+                    <td>${item.motivo || ""}</td>
+                `;
+
+                const actionsCell = document.createElement("td");
+                actionsCell.classList.add("text-end");
+
+                const deleteButton = document.createElement("button");
+                deleteButton.type = "button";
+                deleteButton.className = "btn btn-outline-danger btn-sm";
+                deleteButton.textContent = "Cancelar";
+                deleteButton.addEventListener("click", async () => {
+                    try {
+                        await apiRequest("DELETE", `/api/agenda/${item.id}`);
+                        showAlert(alertContainer, "Agendamento cancelado.", "success");
+                        await refresh();
+                    } catch (error) {
+                        showError(alertContainer, error);
+                    }
+                });
+
+                actionsCell.appendChild(deleteButton);
+                row.appendChild(actionsCell);
+                table.appendChild(row);
+            });
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    }
+
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const payload = {
+            paciente_id: select.value,
+            data: document.getElementById("date")?.value,
+            horario: document.getElementById("time")?.value,
+            motivo: document.getElementById("reason")?.value,
+            profissional: document.getElementById("professional")?.value,
+            observacoes: document.getElementById("notes")?.value,
+        };
+
+        try {
+            await apiRequest("POST", "/api/agenda", payload);
+            showAlert(alertContainer, "Agendamento salvo com sucesso.");
+            form.reset();
+            await loadPatients();
+            await refresh();
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    });
+
+    await loadPatients();
+    await refresh();
 }
 
 
@@ -245,60 +418,154 @@ async function initAgendamentoPage(){
 /* REGISTROS */
 /* ================================================= */
 
-async function initRegistrosPage(){
+async function initRegistrosPage() {
+    const table = document.getElementById("recordsTable");
+    const form = document.getElementById("registroForm");
+    const select = document.getElementById("registroPaciente");
+    const alertContainer = document.getElementById("recordsAlert");
 
-    const table=document.getElementById("recordsTable")
-    const form=document.getElementById("registroForm")
-    const select=document.getElementById("registroPaciente")
+    if (!table || !form || !select) return;
 
-    await buildPatientSelect(select)
+    await buildPatientSelect(select);
 
-    const registros = await apiRequest("GET","/api/registros")
+    async function refresh() {
+        try {
+            const registros = await apiRequest("GET", "/api/registros");
+            table.innerHTML = "";
 
-    table.innerHTML=""
+            registros.forEach((r) => {
+                const row = document.createElement("tr");
 
-    registros.forEach(r=>{
+                row.innerHTML = `
+                    <td>${r.paciente_nome || ""}</td>
+                    <td>${formatDate(r.data)}</td>
+                    <td>${formatTime(r.hora)}</td>
+                    <td>${r.observacoes || ""}</td>
+                    <td>${formatDate(r.created_at)}</td>
+                `;
 
-        const row=document.createElement("tr")
-
-        row.innerHTML=`
-
-        <td>${r.paciente_nome || ""}</td>
-        <td>${formatDate(r.data)}</td>
-        <td>${formatTime(r.hora)}</td>
-        <td>${r.observacoes || ""}</td>
-        <td>${formatDate(r.created_at)}</td>
-
-        `
-
-        table.appendChild(row)
-
-    })
-
-
-    form.addEventListener("submit",async e=>{
-
-        e.preventDefault()
-
-        const payload={
-
-            paciente_id:select.value,
-            data:document.getElementById("registroData").value,
-            hora:document.getElementById("registroHora").value,
-            observacoes:document.getElementById("registroObs").value
-
+                table.appendChild(row);
+            });
+        } catch (error) {
+            showError(alertContainer, error);
         }
+    }
 
-        await apiRequest("POST","/api/registros",payload)
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
 
-        alert("Registro salvo")
+        const payload = {
+            paciente_id: select.value,
+            data: document.getElementById("registroData")?.value,
+            hora: document.getElementById("registroHora")?.value,
+            observacoes: document.getElementById("registroObs")?.value,
+        };
 
-        location.reload()
+        try {
+            await apiRequest("POST", "/api/registros", payload);
+            showAlert(alertContainer, "Registro salvo com sucesso.");
+            form.reset();
+            await refresh();
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    });
 
-    })
+    await refresh();
 
 }
 
+
+/* ================================================= */
+/* FINANCEIRO */
+/* ================================================= */
+
+async function initFinanceiroPage() {
+    const form = document.getElementById("financeForm");
+    const select = document.getElementById("financePatientId");
+    const table = document.getElementById("financeTable");
+    const alertContainer = document.getElementById("financeAlert");
+
+    if (!form || !select || !table) return;
+
+    let patientsCache = [];
+
+    async function loadPatients() {
+        patientsCache = await buildPatientSelect(select);
+    }
+
+    async function refresh() {
+        try {
+            const lancamentos = await apiRequest("GET", "/api/financeiro");
+            table.innerHTML = "";
+            const patientMap = new Map(patientsCache.map((p) => [p.id, p.nome]));
+
+            lancamentos.forEach((item) => {
+                const row = document.createElement("tr");
+                const patientName = patientMap.get(item.paciente_id) || item.paciente_id || "";
+
+                row.innerHTML = `
+                    <td>${patientName}</td>
+                    <td>${formatDate(item.data)}</td>
+                    <td>${formatCurrency(item.valor)}</td>
+                    <td>${item.status || ""}</td>
+                `;
+
+                const actionsCell = document.createElement("td");
+                actionsCell.classList.add("text-end");
+
+                const deleteButton = document.createElement("button");
+                deleteButton.type = "button";
+                deleteButton.className = "btn btn-outline-danger btn-sm";
+                deleteButton.textContent = "Excluir";
+                deleteButton.addEventListener("click", async () => {
+                    try {
+                        await apiRequest("DELETE", `/api/financeiro/${item.id}`);
+                        showAlert(alertContainer, "Lançamento removido.", "success");
+                        await refresh();
+                    } catch (error) {
+                        showError(alertContainer, error);
+                    }
+                });
+
+                actionsCell.appendChild(deleteButton);
+                row.appendChild(actionsCell);
+                table.appendChild(row);
+            });
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    }
+
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const metodoInput = document.getElementById("financeMetodo");
+        const observacoesInput = document.getElementById("financeObservacoes");
+
+        const payload = {
+            paciente_id: select.value,
+            data: document.getElementById("financeDate")?.value,
+            valor: document.getElementById("financeValue")?.value,
+            status: document.getElementById("financeStatus")?.value,
+            metodo_pagamento: metodoInput?.value,
+            observacoes: observacoesInput?.value,
+        };
+
+        try {
+            await apiRequest("POST", "/api/financeiro", payload);
+            showAlert(alertContainer, "Movimentação registrada com sucesso.");
+            form.reset();
+            await loadPatients();
+            await refresh();
+        } catch (error) {
+            showError(alertContainer, error);
+        }
+    });
+
+    await loadPatients();
+    await refresh();
+}
 
 /* ================================================= */
 /* RELATORIOS */
@@ -385,6 +652,12 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(page==="registros"){
 
         initRegistrosPage()
+
+    }
+
+    if(page==="financeiro"){
+
+        initFinanceiroPage()
 
     }
 

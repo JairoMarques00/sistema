@@ -50,3 +50,14 @@ CREATE TABLE IF NOT EXISTS financeiro (
   FOREIGN KEY (paciente_id) REFERENCES pacientes(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS registros (
+  id TEXT PRIMARY KEY,
+  paciente_id TEXT NOT NULL,
+  paciente_nome TEXT,
+  data TEXT NOT NULL,
+  hora TEXT NOT NULL,
+  observacoes TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (paciente_id) REFERENCES pacientes(id) ON DELETE CASCADE
+);
+
