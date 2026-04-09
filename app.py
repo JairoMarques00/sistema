@@ -1,20 +1,27 @@
+import logging
 import sqlite3
 import uuid
 from datetime import datetime
 from io import BytesIO
 
 import pandas as pd
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from werkzeug.utils import secure_filename
 
 from database import close_db, get_db, init_db
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 def create_app():
 
     app = Flask(__name__, template_folder="templates", static_folder="static")
+    app.logger.setLevel(logging.INFO)
+    app.logger.info("Initializing Gendo Pro API at %s", datetime.utcnow().isoformat())
 
     app.config.from_mapping(
         DATABASE="database.db",
@@ -136,30 +143,124 @@ def create_app():
         row = db.execute("SELECT nome FROM pacientes WHERE id = ?", (paciente_id,)).fetchone()
         return row["nome"] if row else None
 
+    def patient_row_to_payload(row):
+        if row is None:
+            return None
+        columns = set(row.keys())
+        age_value = row["idade"]
+        updated_at = row["updated_at"] if "updated_at" in columns and row["updated_at"] else row["created_at"]
+        return {
+            "id": row["id"],
+            "name": row["nome"],
+            "age": str(age_value) if age_value is not None else None,
+            "school": row["escola"],
+            "responsible": row["responsavel"],
+            "phone": row["telefone"],
+            "email": row["email"],
+            "notes": row["observacoes"],
+            "createdAt": row["created_at"],
+            "updatedAt": updated_at,
+        }
+
+    def find_patient_by_name(db, name):
+        if not name:
+            return None
+        return db.execute(
+            "SELECT id, nome FROM pacientes WHERE nome = ? COLLATE NOCASE LIMIT 1",
+            (name,),
+        ).fetchone()
+
+    def appointment_row_to_payload(row):
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "patient": row["nome"],
+            "date": row["data"],
+            "time": row["horario"],
+            "professional": row["profissional"],
+            "reason": row["motivo"],
+            "notes": row["observacoes"],
+            "status": row["status"],
+        }
+
+    def medical_record_row_to_payload(row):
+        if row is None:
+            return None
+        patient_name = row["paciente_nome"] or ""
+        return {
+            "id": row["id"],
+            "patient": patient_name,
+            "date": row["data"],
+            "time": row["hora"],
+            "reason": row["observacoes"],
+            "notes": row["observacoes"],
+            "registeredAt": row["created_at"],
+        }
+
+    def financial_row_to_payload(row):
+        if row is None:
+            return None
+        amount = row["valor"] or 0
+        return {
+            "id": row["id"],
+            "patient": row["nome"],
+            "date": row["data"],
+            "amount": f"{amount:.2f}",
+            "status": row["status"],
+            "registeredAt": row["created_at"],
+        }
+
+    def notification_row_to_payload(row):
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "description": row["description"],
+            "date": row["date"],
+            "read": bool(row["read"]),
+            "linkedDate": row["linked_date"],
+        }
+
+    def create_notification(db, title, description, linked_date=None):
+        notification_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        display_date = now.strftime("%d/%m/%Y %H:%M")
+        db.execute(
+            """
+            INSERT INTO notifications
+            (id, title, description, date, read, linked_date, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notification_id,
+                title,
+                description,
+                display_date,
+                0,
+                linked_date,
+                now.isoformat(),
+            ),
+        )
+        return notification_id
+
     # ----------------------
     # PÁGINAS HTML
     # ----------------------
 
-    @app.route("/")
-    def index():
-        return render_template("index.html")
+    @app.route("/favicon.ico")
+    def favicon():
+        return app.send_static_file("favicon.ico")
 
-    @app.route("/funcionalidades/<page>")
-    def funcionalidade(page):
+    @app.route("/robots.txt")
+    def robots():
+        return app.send_static_file("robots.txt")
 
-        allowed = [
-            "Cadastro",
-            "Agendamento",
-            "Registros",
-            "lista-edicao-pacientes",
-            "Relatorios",
-            "Financeiro",
-        ]
-
-        if page not in allowed:
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_spa(path):
+        if path.startswith("api/") or path.startswith("static/") or path in {"favicon.ico", "robots.txt"}:
             abort(404)
-
-        return render_template(f"funcionalidades/{page}.html")
+        return render_template("index.html")
 
     # ----------------------
     # PACIENTES
@@ -261,6 +362,102 @@ def create_app():
         db.commit()
         return "", 204
 
+    @app.route("/api/patients", methods=["GET"])
+    def get_patients():
+        db = get_db()
+        rows = db.execute("SELECT * FROM pacientes ORDER BY nome").fetchall()
+        payload = [patient_row_to_payload(row) for row in rows]
+        return jsonify({"success": True, "data": payload})
+
+    @app.route("/api/patients", methods=["POST"])
+    def create_patient_v2():
+        data = json_payload()
+        require_fields(data, ["name", "phone", "email"])
+        age_value = data.get("age")
+        if age_value is not None and age_value != "":
+            try:
+                age_value = int(age_value)
+            except (TypeError, ValueError):
+                abort(400, description="Idade precisa ser numérica.")
+        else:
+            age_value = None
+
+        new_id = str(uuid.uuid4())
+        db = get_db()
+        db.execute(
+            """
+            INSERT INTO pacientes
+            (id, nome, idade, escola, responsavel, telefone, email, observacoes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                data.get("name"),
+                age_value,
+                data.get("school"),
+                data.get("responsible"),
+                data.get("phone"),
+                data.get("email"),
+                data.get("notes"),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        db.commit()
+        patient = db.execute("SELECT * FROM pacientes WHERE id = ?", (new_id,)).fetchone()
+        return jsonify({"success": True, "data": patient_row_to_payload(patient)})
+
+    @app.route("/api/patients/<patient_id>", methods=["PUT"])
+    def update_patient_v2(patient_id):
+        data = json_payload()
+        mapping = {
+            "name": "nome",
+            "age": "idade",
+            "school": "escola",
+            "responsible": "responsavel",
+            "phone": "telefone",
+            "email": "email",
+            "notes": "observacoes",
+        }
+        updates = []
+        params = []
+        for field, column in mapping.items():
+            if field in data:
+                value = data[field]
+                if field == "age":
+                    if value is not None and value != "":
+                        try:
+                            value = int(value)
+                        except (TypeError, ValueError):
+                            abort(400, description="Idade precisa ser numérica.")
+                    else:
+                        value = None
+                updates.append(f"{column} = ?")
+                params.append(value)
+        if not updates:
+            abort(400, description="Nenhum campo válido para atualização.")
+        params.append(patient_id)
+
+        db = get_db()
+        cursor = db.execute(
+            f"UPDATE pacientes SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        if cursor.rowcount == 0:
+            abort(404, description="Paciente não encontrado.")
+        db.commit()
+
+        patient = db.execute("SELECT * FROM pacientes WHERE id = ?", (patient_id,)).fetchone()
+        return jsonify({"success": True, "data": patient_row_to_payload(patient)})
+
+    @app.route("/api/patients/<patient_id>", methods=["DELETE"])
+    def delete_patient_v2(patient_id):
+        db = get_db()
+        cursor = db.execute("DELETE FROM pacientes WHERE id = ?", (patient_id,))
+        if cursor.rowcount == 0:
+            abort(404, description="Paciente não encontrado.")
+        db.commit()
+        return jsonify({"success": True, "data": {"id": patient_id}})
+
     # ----------------------
     # AGENDA
     # ----------------------
@@ -355,6 +552,126 @@ def create_app():
             abort(404, description="Agendamento não encontrado.")
         db.commit()
         return "", 204
+
+    @app.route("/api/appointments", methods=["GET"])
+    def get_appointments():
+        db = get_db()
+        rows = db.execute(
+            """
+            SELECT a.*, p.nome
+            FROM agenda a
+            LEFT JOIN pacientes p ON a.paciente_id = p.id
+            ORDER BY a.data, a.horario
+            """
+        ).fetchall()
+        payload = [appointment_row_to_payload(row) for row in rows]
+        return jsonify({"success": True, "data": payload})
+
+    @app.route("/api/appointments", methods=["POST"])
+    def create_appointment_v2():
+        data = json_payload()
+        require_fields(data, ["patient", "date", "time"])
+        db = get_db()
+        patient = find_patient_by_name(db, data.get("patient"))
+        if patient is None:
+            abort(400, description="Paciente não encontrado.")
+
+        new_id = str(uuid.uuid4())
+        db.execute(
+            """
+            INSERT INTO agenda
+            (id, paciente_id, data, horario, status, motivo, profissional, observacoes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                patient["id"],
+                data.get("date"),
+                data.get("time"),
+                data.get("status", "agendado"),
+                data.get("reason"),
+                data.get("professional"),
+                data.get("notes"),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        create_notification(
+            db,
+            "Novo agendamento",
+            f"{patient['nome']} às {data.get('time')} em {data.get('date')}",
+            linked_date=data.get("date"),
+        )
+        db.commit()
+
+        row = db.execute(
+            """
+            SELECT a.*, p.nome
+            FROM agenda a
+            LEFT JOIN pacientes p ON a.paciente_id = p.id
+            WHERE a.id = ?
+            """,
+            (new_id,),
+        ).fetchone()
+
+        return jsonify({"success": True, "data": appointment_row_to_payload(row)})
+
+    @app.route("/api/appointments/<appointment_id>", methods=["PUT"])
+    def update_appointment_v2(appointment_id):
+        data = json_payload()
+        mapping = {
+            "patient": "paciente_id",
+            "date": "data",
+            "time": "horario",
+            "professional": "profissional",
+            "reason": "motivo",
+            "notes": "observacoes",
+            "status": "status",
+        }
+        updates = []
+        params = []
+        db = get_db()
+        for field, column in mapping.items():
+            if field in data:
+                value = data[field]
+                if field == "patient":
+                    patient = find_patient_by_name(db, value)
+                    if patient is None:
+                        abort(400, description="Paciente não encontrado.")
+                    value = patient["id"]
+                updates.append(f"{column} = ?")
+                params.append(value)
+        if not updates:
+            abort(400, description="Nenhum campo válido para atualização.")
+        params.append(appointment_id)
+
+        cursor = db.execute(
+            f"UPDATE agenda SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        if cursor.rowcount == 0:
+            abort(404, description="Agendamento não encontrado.")
+        db.commit()
+
+        row = db.execute(
+            """
+            SELECT a.*, p.nome
+            FROM agenda a
+            LEFT JOIN pacientes p ON a.paciente_id = p.id
+            WHERE a.id = ?
+            """,
+            (appointment_id,),
+        ).fetchone()
+
+        return jsonify({"success": True, "data": appointment_row_to_payload(row)})
+
+    @app.route("/api/appointments/<appointment_id>", methods=["DELETE"])
+    def delete_appointment_v2(appointment_id):
+        db = get_db()
+        cursor = db.execute("DELETE FROM agenda WHERE id = ?", (appointment_id,))
+        if cursor.rowcount == 0:
+            abort(404, description="Agendamento não encontrado.")
+        db.commit()
+        return jsonify({"success": True, "data": {"id": appointment_id}})
 
     # ----------------------
     # SESSÕES
@@ -546,6 +863,67 @@ def create_app():
         db.commit()
         return "", 204
 
+    @app.route("/api/financial", methods=["GET"])
+    def get_financial():
+        db = get_db()
+        rows = db.execute(
+            """
+            SELECT f.*, p.nome
+            FROM financeiro f
+            LEFT JOIN pacientes p ON f.paciente_id = p.id
+            ORDER BY f.data DESC
+            """
+        ).fetchall()
+        payload = [financial_row_to_payload(row) for row in rows]
+        return jsonify({"success": True, "data": payload})
+
+    @app.route("/api/financial", methods=["POST"])
+    def create_financial_record_v2():
+        data = json_payload()
+        require_fields(data, ["patient", "date", "amount", "status"])
+        db = get_db()
+        patient = find_patient_by_name(db, data.get("patient"))
+        if patient is None:
+            abort(400, description="Paciente não encontrado.")
+
+        amount_value = parse_float("amount", data.get("amount"))
+        new_id = str(uuid.uuid4())
+        db.execute(
+            """
+            INSERT INTO financeiro
+            (id, paciente_id, data, valor, status, metodo_pagamento, observacoes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                patient["id"],
+                data.get("date"),
+                amount_value,
+                data.get("status"),
+                data.get("method"),
+                data.get("notes"),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        create_notification(
+            db,
+            "Novo pagamento",
+            f"{patient['nome']} - R$ {amount_value:.2f}",
+            linked_date=data.get("date"),
+        )
+        db.commit()
+
+        row = db.execute(
+            """
+            SELECT f.*, p.nome
+            FROM financeiro f
+            LEFT JOIN pacientes p ON f.paciente_id = p.id
+            WHERE f.id = ?
+            """,
+            (new_id,),
+        ).fetchone()
+        return jsonify({"success": True, "data": financial_row_to_payload(row)})
+
     # ----------------------
     # REGISTROS
     # ----------------------
@@ -643,6 +1021,50 @@ def create_app():
             abort(404, description="Registro não encontrado.")
         db.commit()
         return "", 204
+
+    @app.route("/api/records", methods=["GET"])
+    def get_records():
+        db = get_db()
+        rows = db.execute(
+            """
+            SELECT r.*
+            FROM registros r
+            ORDER BY data DESC, hora DESC
+            """
+        ).fetchall()
+        payload = [medical_record_row_to_payload(row) for row in rows]
+        return jsonify({"success": True, "data": payload})
+
+    @app.route("/api/records", methods=["POST"])
+    def create_record_v2():
+        data = json_payload()
+        require_fields(data, ["patient", "date", "time"])
+        db = get_db()
+        patient = find_patient_by_name(db, data.get("patient"))
+        if patient is None:
+            abort(400, description="Paciente não encontrado.")
+
+        new_id = str(uuid.uuid4())
+        db.execute(
+            """
+            INSERT INTO registros
+            (id, paciente_id, paciente_nome, data, hora, observacoes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                patient["id"],
+                patient["nome"],
+                data.get("date"),
+                data.get("time"),
+                data.get("notes"),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        db.commit()
+
+        row = db.execute("SELECT * FROM registros WHERE id = ?", (new_id,)).fetchone()
+        return jsonify({"success": True, "data": medical_record_row_to_payload(row)})
 
     # ----------------------
     # RELATÓRIO / EXPORTAÇÕES
@@ -766,12 +1188,118 @@ def create_app():
         )
         return dataframe_to_excel_response(df, "Financeiro", "financeiro.xlsx")
 
+    @app.route("/api/dashboard")
+    def get_dashboard():
+        db = get_db()
+        total_patients = db.execute("SELECT COUNT(*) AS total FROM pacientes").fetchone()["total"]
+        total_appointments = db.execute("SELECT COUNT(*) AS total FROM agenda").fetchone()["total"]
+        total_payments = db.execute("SELECT SUM(valor) AS total FROM financeiro").fetchone()["total"] or 0
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        today_rows = db.execute(
+            """
+            SELECT a.*, p.nome
+            FROM agenda a
+            LEFT JOIN pacientes p ON a.paciente_id = p.id
+            WHERE a.data = ?
+            ORDER BY a.horario
+            """,
+            (today_str,),
+        ).fetchall()
+        today_appointments = [appointment_row_to_payload(row) for row in today_rows]
+
+        payments_rows = db.execute(
+            """
+            SELECT f.*, p.nome
+            FROM financeiro f
+            LEFT JOIN pacientes p ON f.paciente_id = p.id
+            ORDER BY f.data DESC
+            LIMIT 4
+            """
+        ).fetchall()
+        recent_payments = [financial_row_to_payload(row) for row in payments_rows]
+
+        stats = [
+            {"label": "Pacientes ativos", "value": str(total_patients), "icon": "Users", "change": "Atualizado hoje"},
+            {"label": "Agendamentos", "value": str(total_appointments), "icon": "CalendarDays", "change": "Últimos 7 dias"},
+            {"label": "Faturamento", "value": f"R$ {total_payments:,.2f}", "icon": "DollarSign", "change": "Este mês"},
+            {"label": "Relatórios", "value": "Disponível", "icon": "FileText", "change": "Pronto para exportar"},
+        ]
+
+        summary = f"{total_patients} pacientes cadastrados · {total_appointments} consultas agendadas"
+        return jsonify(
+            {
+                "success": True,
+                "data": {
+                    "stats": stats,
+                    "todayAppointments": today_appointments,
+                    "recentPayments": recent_payments,
+                    "summary": summary,
+                },
+            }
+        )
+
+    @app.route("/api/notifications")
+    def list_notifications():
+        db = get_db()
+        rows = db.execute("SELECT * FROM notifications ORDER BY created_at DESC").fetchall()
+        payload = [notification_row_to_payload(row) for row in rows]
+        return jsonify({"success": True, "data": payload})
+
+    @app.route("/api/notifications/<notification_id>/read", methods=["PUT"])
+    def mark_notification_read_endpoint(notification_id):
+        db = get_db()
+        cursor = db.execute("UPDATE notifications SET read = 1 WHERE id = ?", (notification_id,))
+        if cursor.rowcount == 0:
+            abort(404, description="Notificação não encontrada.")
+        db.commit()
+        return jsonify({"success": True, "data": {"success": True}})
+
+    @app.route("/api/notifications/mark-all-read", methods=["POST"])
+    def mark_all_notifications_read_endpoint():
+        db = get_db()
+        db.execute("UPDATE notifications SET read = 1 WHERE read = 0")
+        db.commit()
+        return jsonify({"success": True, "data": {"success": True}})
+
+    @app.route("/api/reports/patient-pdf", methods=["POST"])
+    def reports_patient_pdf():
+        db = get_db()
+        row = db.execute("SELECT id, nome FROM pacientes ORDER BY created_at DESC LIMIT 1").fetchone()
+        if row is None:
+            abort(400, description="Nenhum paciente cadastrado para gerar relatórios.")
+        filename = secure_filename(f"relatorio_{row['nome']}.pdf") or f"relatorio_{row['id']}.pdf"
+        url = url_for("relatorio_pdf", paciente_id=row["id"])
+        return jsonify({"success": True, "data": {"url": url, "filename": filename}})
+
+    @app.route("/api/reports/export-excel", methods=["POST"])
+    def reports_export_excel():
+        url = url_for("exportar_pacientes")
+        return jsonify({"success": True, "data": {"url": url, "filename": "pacientes.xlsx"}})
+
+    @app.route("/api/health")
+    def health():
+        return jsonify({"status": "ok"})
+
+    @app.after_request
+    def log_api_response(response):
+        if request.path.startswith("/api") and response.status_code >= 400:
+            app.logger.warning(
+                "API response %s %s %s", request.method, request.path, response.status_code
+            )
+        return response
+
+    @app.teardown_request
+    def log_request_exception(exc):
+        if exc:
+            app.logger.error("Exception during request %s %s", request.method, request.path, exc_info=exc)
+
     return app
 
 
 if __name__ == "__main__":
 
     app = create_app()
+    app.logger.info("Starting Flask server (debug=%s)", app.debug)
 
     app.run(debug=True)
 

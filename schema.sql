@@ -61,3 +61,13 @@ CREATE TABLE IF NOT EXISTS registros (
   FOREIGN KEY (paciente_id) REFERENCES pacientes(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  date TEXT NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0,
+  linked_date TEXT,
+  created_at TEXT NOT NULL
+);
+
